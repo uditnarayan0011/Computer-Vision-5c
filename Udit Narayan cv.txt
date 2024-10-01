@@ -1,0 +1,115 @@
+import os
+import cv2
+import numpy as np
+from sklearn.model_selection import train_test_split
+import matplotlib.pyplot as plt
+
+# Dataset paths
+DATASET_PATH = "path/to/your/dataset/folder"
+IMG_HEIGHT, IMG_WIDTH = 256, 256  # Resize dimensions
+
+def load_images(data_path, mask_suffix="_mask"):
+    images = []
+    masks = []
+    
+    for filename in os.listdir(data_path):
+        if not filename.endswith(mask_suffix + ".tif"):
+            img_path = os.path.join(data_path, filename)
+            mask_path = os.path.join(data_path, filename.replace(".tif", mask_suffix + ".tif"))
+            
+            if os.path.exists(mask_path):
+                image = cv2.imread(img_path, cv2.IMREAD_GRAYSCALE)
+                mask = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)
+                
+                # Resize and normalize
+                image = cv2.resize(image, (IMG_HEIGHT, IMG_WIDTH)) / 255.0
+                mask = cv2.resize(mask, (IMG_HEIGHT, IMG_WIDTH)) / 255.0
+                mask = np.expand_dims(mask, axis=-1)
+                
+                images.append(image)
+                masks.append(mask)
+    
+    return np.array(images), np.array(masks)
+
+# Load images and masks
+images, masks = load_images(DATASET_PATH)
+
+# Split data into training and validation sets
+X_train, X_val, y_train, y_val = train_test_split(images, masks, test_size=0.2, random_state=42)
+
+# Example to visualize
+plt.subplot(1, 2, 1)
+plt.imshow(X_train[0], cmap="gray")
+plt.subplot(1, 2, 2)
+plt.imshow(y_train[0][:, :, 0], cmap="gray")
+plt.show()
+import tensorflow as tf
+from tensorflow.keras import layers, models
+
+def unet_model(input_shape=(IMG_HEIGHT, IMG_WIDTH, 1)):
+    inputs = layers.Input(input_shape)
+    
+    # Encoder
+    c1 = layers.Conv2D(64, (3, 3), activation='relu', padding='same')(inputs)
+    p1 = layers.MaxPooling2D((2, 2))(c1)
+    
+    c2 = layers.Conv2D(128, (3, 3), activation='relu', padding='same')(p1)
+    p2 = layers.MaxPooling2D((2, 2))(c2)
+    
+    # Bottleneck
+    b1 = layers.Conv2D(256, (3, 3), activation='relu', padding='same')(p2)
+    
+    # Decoder
+    u1 = layers.Conv2DTranspose(128, (2, 2), strides=(2, 2), padding='same')(b1)
+    u1 = layers.concatenate([u1, c2])
+    c3 = layers.Conv2D(128, (3, 3), activation='relu', padding='same')(u1)
+    
+    u2 = layers.Conv2DTranspose(64, (2, 2), strides=(2, 2), padding='same')(c3)
+    u2 = layers.concatenate([u2, c1])
+    c4 = layers.Conv2D(64, (3, 3), activation='relu', padding='same')(u2)
+    
+    outputs = layers.Conv2D(1, (1, 1), activation='sigmoid')(c4)
+    
+    model = models.Model(inputs=[inputs], outputs=[outputs])
+    
+    return model
+def attention_block(x, g, inter_channel):
+    theta_x = layers.Conv2D(inter_channel, (1, 1))(x)
+    phi_g = layers.Conv2D(inter_channel, (1, 1))(g)
+    
+    add_xg = layers.add([theta_x, phi_g])
+    psi = layers.Activation('relu')(add_xg)
+    psi = layers.Conv2D(1, (1, 1))(psi)
+    psi = layers.Activation('sigmoid')(psi)
+    
+    return layers.multiply([x, psi])
+
+def attention_unet_model(input_shape=(IMG_HEIGHT, IMG_WIDTH, 1)):
+    inputs = layers.Input(input_shape)
+    
+    # Encoder
+    c1 = layers.Conv2D(64, (3, 3), activation='relu', padding='same')(inputs)
+    p1 = layers.MaxPooling2D((2, 2))(c1)
+    
+    c2 = layers.Conv2D(128, (3, 3), activation='relu', padding='same')(p1)
+    p2 = layers.MaxPooling2D((2, 2))(c2)
+    
+    # Bottleneck
+    b1 = layers.Conv2D(256, (3, 3), activation='relu', padding='same')(p2)
+    
+    # Decoder with Attention
+    u1 = layers.Conv2DTranspose(128, (2, 2), strides=(2, 2), padding='same')(b1)
+    att1 = attention_block(c2, u1, 128)
+    u1 = layers.concatenate([u1, att1])
+    c3 = layers.Conv2D(128, (3, 3), activation='relu', padding='same')(u1)
+    
+    u2 = layers.Conv2DTranspose(64, (2, 2), strides=(2, 2), padding='same')(c3)
+    att2 = attention_block(c1, u2, 64)
+    u2 = layers.concatenate([u2, att2])
+    c4 = layers.Conv2D(64, (3, 3), activation='relu', padding='same')(u2)
+    
+    outputs = layers.Conv2D(1, (1, 1), activation='sigmoid')(c4)
+    
+    model = models.Model(inputs=[inputs], outputs=[outputs])
+    
+    return model
